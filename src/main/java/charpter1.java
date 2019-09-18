@@ -1,4 +1,6 @@
 import redis.clients.jedis.Jedis;
+import redis.clients.jedis.Pipeline;
+import redis.clients.jedis.Response;
 import redis.clients.jedis.ZParams;
 
 import java.util.*;
@@ -80,10 +82,23 @@ public class charpter1 {
         if(conn.zscore("time:",arcticle)<cutoff)
             return;
         String article_id=arcticle.substring(arcticle.indexOf(":")+1);
-        if(conn.sadd("voted:"+article_id,user)==1){
-            conn.zincrby("score:"+article_id,VOTE_SCORE,arcticle);
-            conn.hincrBy(arcticle,"votes",1);
-        }
+          Pipeline pipeline= conn.pipelined();
+          pipeline.multi();
+          pipeline.sadd("voted:"+article_id,user);
+         Response<List<Object>> listResponsePipeline=pipeline.exec();//执行批量语句
+         pipeline.sync();
+//         for(Object object:listResponsePipeline.get()){
+//             System.out.println(object);
+//         }
+         if((Long)listResponsePipeline.get().get(0)==1) {
+//          Response<List<Object>> responseFromPipeLine=pipeline.exec();
+//          System.out.println(responseFromPipeLine.get().get(0));
+             pipeline.multi();
+             pipeline.zincrby("score:" + article_id, VOTE_SCORE, arcticle);
+             pipeline.hincrBy(arcticle, "votes", 1);
+         }
+          pipeline.exec();
+          pipeline.sync();//close the pipeline
     }
 
     public List<Map<String,String>> getArticles(Jedis conn,int page){
@@ -94,11 +109,27 @@ public class charpter1 {
         int end=start+ARTICLES_PER_PAGE-1;
         Set<String> ids=conn.zrevrange(order,start,end);
         List<Map<String,String>> articles=new ArrayList<>();
+        String[] idstring= ids.toArray(new String[ids.size()]);
+        Pipeline pipeline=conn.pipelined();//事务开始
+        pipeline.multi();
         for(String id:ids){
-            Map<String,String> artcle=conn.hgetAll(id);
-            artcle.put("id",id);
-            articles.add(artcle);
+               pipeline.hgetAll(id);
+//            Map<String,String> artcle=conn.hgetAll(id);
+//            artcle.put("id",id);
+//            articles.add(artcle);
         }
+        Response<List<Object>> listResponsePipeLine=pipeline.exec();
+        pipeline.sync();
+        for(int i=0;i<listResponsePipeLine.get().size();i++){
+            Map<String,String> article= (Map<String, String>) listResponsePipeLine.get().get(i);
+            article.put("id",idstring[i]);
+            articles.add(article);
+        }
+//        for(Object object:listResponsePipeLine.get()){
+//             System.out.println(object);
+//             Map<String,String> article= (Map<String, String>) object;
+//             articles.add(article);
+//         }
         return articles;
     }
     public void addGroups(Jedis conn,String articleId,String[] toAdd){
